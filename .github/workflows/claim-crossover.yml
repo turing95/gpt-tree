@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 355
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         seed: [1337, 2027, 9001]
     steps:
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 355
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 18
       matrix:
         seed: [1337, 2027, 9001]
         budget: [15, 60, 240]
