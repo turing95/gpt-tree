@@ -1,0 +1,229 @@
+name: RR-TreeLM Claim Crossover
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claim-crossover-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATASET: tinyshakespeare
+  CLAIM_BUDGETS: "15,60,240"
+  CLAIM_SEEDS: "1337,2027,9001"
+
+jobs:
+  rr_seed:
+    name: RR Seed ${{ matrix.seed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1337, 2027, 9001]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: Resolve thread budget
+        run: |
+          THREAD_COUNT=$(python3 - <<'PY'
+import os
+c = os.cpu_count() or 2
+p = max(1, c // 2) if c > 2 else c
+print(min(8, p))
+PY
+)
+          echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
+          echo "Using THREAD_COUNT=${THREAD_COUNT}"
+
+      - name: Train RR seed pipeline
+        run: |
+          python3 treegpt.py prepare --dataset "$DATASET"
+          python3 treegpt.py ppm-gate --dataset "$DATASET"
+          python3 treegpt.py build-features --dataset "$DATASET"
+          python3 treegpt.py build-retrieval --dataset "$DATASET"
+          python3 treegpt.py train-cascade --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT"
+          python3 treegpt.py train-calibrator --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --fusion-mode ppm_primary --calibrator-mode delta
+          python3 treegpt.py eval --dataset "$DATASET" --split val
+          cp "artifacts/$DATASET/metrics_val.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_val.json"
+          python3 treegpt.py eval --dataset "$DATASET" --split test
+          cp "artifacts/$DATASET/metrics_test.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_test.json"
+
+      - name: Pack RR seed outputs
+        run: |
+          mkdir -p "ci_out/rr_seed_${{ matrix.seed }}"
+          cp "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_val.json" "ci_out/rr_seed_${{ matrix.seed }}/"
+          cp "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_test.json" "ci_out/rr_seed_${{ matrix.seed }}/"
+
+      - name: Upload RR seed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rr-seed-${{ matrix.seed }}
+          path: ci_out/rr_seed_${{ matrix.seed }}
+          if-no-files-found: error
+
+  tf_shard:
+    name: TF ${{ matrix.model.name }} b${{ matrix.budget }} s${{ matrix.seed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1337, 2027, 9001]
+        budget: [15, 60, 240]
+        model:
+          - name: TF-1L-64d
+          - name: TF-2L-96d
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: Resolve thread budget
+        run: |
+          THREAD_COUNT=$(python3 - <<'PY'
+import os
+c = os.cpu_count() or 2
+p = max(1, c // 2) if c > 2 else c
+print(min(8, p))
+PY
+)
+          echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
+          echo "Using THREAD_COUNT=${THREAD_COUNT}"
+
+      - name: Run TF shard
+        run: |
+          mkdir -p ci_out/tf
+          python3 treegpt.py prepare --dataset "$DATASET"
+          python3 treegpt.py benchmark-tf-shard \
+            --dataset "$DATASET" \
+            --model-name "${{ matrix.model.name }}" \
+            --budget-minutes "${{ matrix.budget }}" \
+            --seed "${{ matrix.seed }}" \
+            --thread-count "$THREAD_COUNT" \
+            --output-json "ci_out/tf/${{ matrix.model.name }}_b${{ matrix.budget }}_s${{ matrix.seed }}.json"
+
+      - name: Upload TF shard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-${{ matrix.model.name }}-b${{ matrix.budget }}-s${{ matrix.seed }}
+          path: ci_out/tf/*.json
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble Claim Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [rr_seed, tf_shard]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: Download RR seed artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rr-seed-*
+          path: ci_in/rr
+          merge-multiple: true
+
+      - name: Download TF shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tf-*
+          path: ci_in/tf
+          merge-multiple: true
+
+      - name: Resolve thread budget
+        run: |
+          THREAD_COUNT=$(python3 - <<'PY'
+import os
+c = os.cpu_count() or 2
+p = max(1, c // 2) if c > 2 else c
+print(min(8, p))
+PY
+)
+          echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
+          echo "Using THREAD_COUNT=${THREAD_COUNT}"
+
+      - name: Assemble benchmark + claim + acceptance
+        run: |
+          python3 treegpt.py benchmark-assemble \
+            --dataset "$DATASET" \
+            --rr-test-glob "ci_in/rr/**/metrics_seed_*_test.json" \
+            --rr-val-glob "ci_in/rr/**/metrics_seed_*_val.json" \
+            --tf-glob "ci_in/tf/**/*.json" \
+            --budgets "$CLAIM_BUDGETS" \
+            --seeds "$CLAIM_SEEDS" \
+            --thread-count "$THREAD_COUNT"
+
+      - name: Write run summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+import json
+from pathlib import Path
+root = Path('artifacts/tinyshakespeare')
+acc = json.loads((root / 'acceptance_report.json').read_text())
+ct = json.loads((root / 'claim_table.json').read_text())
+print('## Claim Gate Summary')
+for k, v in acc.get('primary', {}).items():
+    print(f"- `{k}`: **{v.get('status')}**")
+print('')
+rr = ct.get('rr_treelm', {}).get('aggregate', {})
+if rr:
+    print('## RR Aggregate (3 seeds expected)')
+    print(f"- final_nll_mean: {rr.get('final_nll_mean')}")
+    print(f"- final_bpc_mean: {rr.get('final_bpc_mean')}")
+print('')
+print('## Artifacts')
+for name in [
+    'benchmark_crossover_cpu.json',
+    'claim_table.json',
+    'acceptance_report.json',
+    'metrics_test.json',
+    'metrics_val.json',
+    'run_manifest.json',
+]:
+    p = root / name
+    print(f"- `{p}` ({'ok' if p.exists() else 'missing'})")
+PY
+
+      - name: Upload final claim artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claim-final-artifacts
+          path: |
+            artifacts/tinyshakespeare/benchmark_crossover_cpu.json
+            artifacts/tinyshakespeare/claim_table.json
+            artifacts/tinyshakespeare/acceptance_report.json
+            artifacts/tinyshakespeare/metrics_test.json
+            artifacts/tinyshakespeare/metrics_val.json
+            artifacts/tinyshakespeare/run_manifest.json
+          if-no-files-found: error

@@ -1,0 +1,50 @@
+{
+  "dataset": "tinyshakespeare",
+  "ctx_len": 256,
+  "k_folds": 3,
+  "thread_count": 8,
+  "seed": 1337,
+  "feature_budget": {
+    "pos_onehot_dim": 24832,
+    "pos_ngram_dim": 49152,
+    "skipgram_dim": 24576,
+    "misc_dim": 2048,
+    "total_dim": 100608
+  },
+  "cascade": {
+    "stage1": {"depth": 7, "iterations": 1200, "learning_rate": 0.05, "l2_leaf_reg": 8.0, "rsm": 0.25},
+    "stage2": {"depth": 6, "iterations": 900, "learning_rate": 0.05, "l2_leaf_reg": 10.0, "rsm": 0.25},
+    "stage3": {"depth": 6, "iterations": 700, "learning_rate": 0.04, "l2_leaf_reg": 12.0, "rsm": 0.25}
+  },
+  "retrieval": {
+    "ppm_order": 12,
+    "candidate_pool": 1024,
+    "calibrator_cap": 192
+  },
+  "fusion": {
+    "fusion_mode": "ppm_primary",
+    "calibrator_mode": "delta",
+    "ppm_alpha": 1.0,
+    "stage_beta": 0.35,
+    "simhash_gamma": 0.08,
+    "overlap_delta": 0.08,
+    "calibrator_epsilon": 0.2,
+    "calibrator_clamp": 0.35,
+    "aux_depth_threshold": 6.0,
+    "aux_entropy_threshold": 3.0
+  },
+  "sampling": {
+    "temperature": 0.9,
+    "top_p": 0.95,
+    "prompts": ["", "ROMEO:", "JULIET:"]
+  },
+  "benchmark": {
+    "suite": "crossover_cpu",
+    "budgets_minutes": [15, 60, 240],
+    "seeds": [1337, 2027, 9001],
+    "transformers": [
+      {"name": "TF-1L-64d", "n_layer": 1, "n_embd": 64},
+      {"name": "TF-2L-96d", "n_layer": 2, "n_embd": 96}
+    ]
+  }
+}

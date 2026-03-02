@@ -1,0 +1,20 @@
+{
+  "dataset": "tinyshakespeare",
+  "ablations": [
+    "remove_bruteforce_feature_expansion",
+    "remove_compression_features",
+    "cascade_depth_1",
+    "cascade_depth_2",
+    "cascade_depth_3",
+    "retrieval_ppm_only",
+    "retrieval_simhash_only",
+    "retrieval_overlap_only",
+    "retrieval_all",
+    "candidate_k_64",
+    "candidate_k_256",
+    "candidate_k_512",
+    "candidate_k_1024",
+    "no_calibrator",
+    "with_calibrator"
+  ]
+}

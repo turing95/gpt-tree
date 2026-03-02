@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+artifacts/
+catboost_info/
+data/
+*.pyc
+*.pyo
+.DS_Store
