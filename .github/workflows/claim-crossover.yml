@@ -39,13 +39,7 @@ jobs:
 
       - name: Resolve thread budget
         run: |
-          THREAD_COUNT=$(python3 - <<'PY'
-import os
-c = os.cpu_count() or 2
-p = max(1, c // 2) if c > 2 else c
-print(min(8, p))
-PY
-)
+          THREAD_COUNT=$(python3 -c 'import os; c=os.cpu_count() or 2; p=max(1, c // 2) if c > 2 else c; print(min(8, p))')
           echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
           echo "Using THREAD_COUNT=${THREAD_COUNT}"
 
@@ -101,13 +95,7 @@ PY
 
       - name: Resolve thread budget
         run: |
-          THREAD_COUNT=$(python3 - <<'PY'
-import os
-c = os.cpu_count() or 2
-p = max(1, c // 2) if c > 2 else c
-print(min(8, p))
-PY
-)
+          THREAD_COUNT=$(python3 -c 'import os; c=os.cpu_count() or 2; p=max(1, c // 2) if c > 2 else c; print(min(8, p))')
           echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
           echo "Using THREAD_COUNT=${THREAD_COUNT}"
 
@@ -163,13 +151,7 @@ PY
 
       - name: Resolve thread budget
         run: |
-          THREAD_COUNT=$(python3 - <<'PY'
-import os
-c = os.cpu_count() or 2
-p = max(1, c // 2) if c > 2 else c
-print(min(8, p))
-PY
-)
+          THREAD_COUNT=$(python3 -c 'import os; c=os.cpu_count() or 2; p=max(1, c // 2) if c > 2 else c; print(min(8, p))')
           echo "THREAD_COUNT=${THREAD_COUNT}" >> "$GITHUB_ENV"
           echo "Using THREAD_COUNT=${THREAD_COUNT}"
 
@@ -183,37 +165,6 @@ PY
             --budgets "$CLAIM_BUDGETS" \
             --seeds "$CLAIM_SEEDS" \
             --thread-count "$THREAD_COUNT"
-
-      - name: Write run summary
-        run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-import json
-from pathlib import Path
-root = Path('artifacts/tinyshakespeare')
-acc = json.loads((root / 'acceptance_report.json').read_text())
-ct = json.loads((root / 'claim_table.json').read_text())
-print('## Claim Gate Summary')
-for k, v in acc.get('primary', {}).items():
-    print(f"- `{k}`: **{v.get('status')}**")
-print('')
-rr = ct.get('rr_treelm', {}).get('aggregate', {})
-if rr:
-    print('## RR Aggregate (3 seeds expected)')
-    print(f"- final_nll_mean: {rr.get('final_nll_mean')}")
-    print(f"- final_bpc_mean: {rr.get('final_bpc_mean')}")
-print('')
-print('## Artifacts')
-for name in [
-    'benchmark_crossover_cpu.json',
-    'claim_table.json',
-    'acceptance_report.json',
-    'metrics_test.json',
-    'metrics_val.json',
-    'run_manifest.json',
-]:
-    p = root / name
-    print(f"- `{p}` ({'ok' if p.exists() else 'missing'})")
-PY
 
       - name: Upload final claim artifacts
         uses: actions/upload-artifact@v4
