@@ -1,7 +1,7 @@
 name: RR-TreeLM Claim Crossover
 
-on:
-  workflow_dispatch:
+"on":
+  workflow_dispatch: {}
 
 permissions:
   contents: read
