@@ -1,7 +1,20 @@
 name: RR-TreeLM Claim Crossover
 
 "on":
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      rr_max_examples:
+        description: "Max RR examples for feature/retrieval/cascade/calibrator (keeps free runners stable)"
+        required: false
+        default: "300000"
+      rr_iteration_scale:
+        description: "Cascade iteration scale for RR jobs"
+        required: false
+        default: "0.6"
+      rr_max_eval_examples:
+        description: "Eval cap for RR val/test metrics"
+        required: false
+        default: "5000"
 
 permissions:
   contents: read
@@ -15,6 +28,9 @@ env:
   DATASET: tinyshakespeare
   CLAIM_BUDGETS: "15,60,240"
   CLAIM_SEEDS: "1337,2027,9001"
+  RR_MAX_EXAMPLES: ${{ github.event.inputs.rr_max_examples || '300000' }}
+  RR_ITERATION_SCALE: ${{ github.event.inputs.rr_iteration_scale || '0.6' }}
+  RR_MAX_EVAL_EXAMPLES: ${{ github.event.inputs.rr_max_eval_examples || '5000' }}
 
 jobs:
   rr_seed:
@@ -36,7 +52,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install numpy scipy scikit-learn joblib catboost pydivsufsort
 
       - name: Resolve thread budget
         run: |
@@ -48,13 +64,13 @@ jobs:
         run: |
           python3 treegpt.py prepare --dataset "$DATASET"
           python3 treegpt.py ppm-gate --dataset "$DATASET"
-          python3 treegpt.py build-features --dataset "$DATASET"
-          python3 treegpt.py build-retrieval --dataset "$DATASET"
-          python3 treegpt.py train-cascade --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT"
-          python3 treegpt.py train-calibrator --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --fusion-mode ppm_primary --calibrator-mode delta
-          python3 treegpt.py eval --dataset "$DATASET" --split val
+          python3 treegpt.py build-features --dataset "$DATASET" --max-examples "$RR_MAX_EXAMPLES"
+          python3 treegpt.py build-retrieval --dataset "$DATASET" --max-examples "$RR_MAX_EXAMPLES"
+          python3 treegpt.py train-cascade --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --max-examples "$RR_MAX_EXAMPLES" --iteration-scale "$RR_ITERATION_SCALE"
+          python3 treegpt.py train-calibrator --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --max-examples "$RR_MAX_EXAMPLES" --tune-max-examples 4000 --fusion-mode ppm_primary --calibrator-mode delta
+          python3 treegpt.py eval --dataset "$DATASET" --split val --max-eval-examples "$RR_MAX_EVAL_EXAMPLES"
           cp "artifacts/$DATASET/metrics_val.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_val.json"
-          python3 treegpt.py eval --dataset "$DATASET" --split test
+          python3 treegpt.py eval --dataset "$DATASET" --split test --max-eval-examples "$RR_MAX_EVAL_EXAMPLES"
           cp "artifacts/$DATASET/metrics_test.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_test.json"
 
       - name: Pack RR seed outputs
@@ -62,8 +78,11 @@ jobs:
           mkdir -p "ci_out/rr_seed_${{ matrix.seed }}"
           cp "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_val.json" "ci_out/rr_seed_${{ matrix.seed }}/"
           cp "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_test.json" "ci_out/rr_seed_${{ matrix.seed }}/"
+          test -f "artifacts/$DATASET/run_manifest.json" && cp "artifacts/$DATASET/run_manifest.json" "ci_out/rr_seed_${{ matrix.seed }}/" || true
+          test -f "artifacts/$DATASET/ppm_gate.json" && cp "artifacts/$DATASET/ppm_gate.json" "ci_out/rr_seed_${{ matrix.seed }}/" || true
 
       - name: Upload RR seed artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rr-seed-${{ matrix.seed }}
@@ -93,7 +112,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install numpy scipy scikit-learn joblib pydivsufsort torch
 
       - name: Resolve thread budget
         run: |
@@ -135,7 +154,7 @@ jobs:
       - name: Install deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install numpy scipy scikit-learn joblib
 
       - name: Download RR seed artifacts
         uses: actions/download-artifact@v4
