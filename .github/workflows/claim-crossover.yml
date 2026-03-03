@@ -4,17 +4,17 @@ name: RR-TreeLM Claim Crossover
   workflow_dispatch:
     inputs:
       rr_max_examples:
-        description: "Max RR examples for feature/retrieval/cascade/calibrator (keeps free runners stable)"
+        description: "Max RR examples for feature/retrieval/cascade/calibrator"
         required: false
-        default: "300000"
+        default: "1003854"
       rr_iteration_scale:
         description: "Cascade iteration scale for RR jobs"
         required: false
-        default: "0.6"
+        default: "1.0"
       rr_max_eval_examples:
         description: "Eval cap for RR val/test metrics"
         required: false
-        default: "5000"
+        default: "100000000"
 
 permissions:
   contents: read
@@ -28,9 +28,9 @@ env:
   DATASET: tinyshakespeare
   CLAIM_BUDGETS: "15,60,240"
   CLAIM_SEEDS: "1337,2027,9001"
-  RR_MAX_EXAMPLES: ${{ github.event.inputs.rr_max_examples || '300000' }}
-  RR_ITERATION_SCALE: ${{ github.event.inputs.rr_iteration_scale || '0.6' }}
-  RR_MAX_EVAL_EXAMPLES: ${{ github.event.inputs.rr_max_eval_examples || '5000' }}
+  RR_MAX_EXAMPLES: ${{ github.event.inputs.rr_max_examples || '1003854' }}
+  RR_ITERATION_SCALE: ${{ github.event.inputs.rr_iteration_scale || '1.0' }}
+  RR_MAX_EVAL_EXAMPLES: ${{ github.event.inputs.rr_max_eval_examples || '100000000' }}
 
 jobs:
   rr_seed:
@@ -62,16 +62,38 @@ jobs:
 
       - name: Train RR seed pipeline
         run: |
+          set -euo pipefail
+          heartbeat() {
+            while true; do
+              echo "[heartbeat][RR seed ${{ matrix.seed }}] $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+              sleep 120
+            done
+          }
+          heartbeat &
+          HB_PID=$!
+          trap 'kill "$HB_PID" >/dev/null 2>&1 || true' EXIT
+
+          echo "[RR][${{ matrix.seed }}] prepare"
           python3 treegpt.py prepare --dataset "$DATASET"
+          echo "[RR][${{ matrix.seed }}] ppm-gate"
           python3 treegpt.py ppm-gate --dataset "$DATASET"
+          echo "[RR][${{ matrix.seed }}] build-features"
           python3 treegpt.py build-features --dataset "$DATASET" --max-examples "$RR_MAX_EXAMPLES"
+          echo "[RR][${{ matrix.seed }}] build-retrieval"
           python3 treegpt.py build-retrieval --dataset "$DATASET" --max-examples "$RR_MAX_EXAMPLES"
+          echo "[RR][${{ matrix.seed }}] train-cascade"
           python3 treegpt.py train-cascade --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --max-examples "$RR_MAX_EXAMPLES" --iteration-scale "$RR_ITERATION_SCALE"
+          echo "[RR][${{ matrix.seed }}] train-calibrator"
           python3 treegpt.py train-calibrator --dataset "$DATASET" --seed "${{ matrix.seed }}" --thread-count "$THREAD_COUNT" --max-examples "$RR_MAX_EXAMPLES" --tune-max-examples 4000 --fusion-mode ppm_primary --calibrator-mode delta
+          echo "[RR][${{ matrix.seed }}] eval-val"
           python3 treegpt.py eval --dataset "$DATASET" --split val --max-eval-examples "$RR_MAX_EVAL_EXAMPLES"
           cp "artifacts/$DATASET/metrics_val.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_val.json"
+          echo "[RR][${{ matrix.seed }}] eval-test"
           python3 treegpt.py eval --dataset "$DATASET" --split test --max-eval-examples "$RR_MAX_EVAL_EXAMPLES"
           cp "artifacts/$DATASET/metrics_test.json" "artifacts/$DATASET/metrics_seed_${{ matrix.seed }}_test.json"
+
+          kill "$HB_PID" >/dev/null 2>&1 || true
+          trap - EXIT
 
       - name: Pack RR seed outputs
         run: |
@@ -95,7 +117,7 @@ jobs:
     timeout-minutes: 355
     strategy:
       fail-fast: false
-      max-parallel: 18
+      max-parallel: 17
       matrix:
         seed: [1337, 2027, 9001]
         budget: [15, 60, 240]
@@ -122,6 +144,17 @@ jobs:
 
       - name: Run TF shard
         run: |
+          set -euo pipefail
+          heartbeat() {
+            while true; do
+              echo "[heartbeat][TF ${{ matrix.model.name }} b${{ matrix.budget }} s${{ matrix.seed }}] $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+              sleep 120
+            done
+          }
+          heartbeat &
+          HB_PID=$!
+          trap 'kill "$HB_PID" >/dev/null 2>&1 || true' EXIT
+
           mkdir -p ci_out/tf
           python3 treegpt.py prepare --dataset "$DATASET"
           python3 treegpt.py benchmark-tf-shard \
@@ -131,6 +164,9 @@ jobs:
             --seed "${{ matrix.seed }}" \
             --thread-count "$THREAD_COUNT" \
             --output-json "ci_out/tf/${{ matrix.model.name }}_b${{ matrix.budget }}_s${{ matrix.seed }}.json"
+
+          kill "$HB_PID" >/dev/null 2>&1 || true
+          trap - EXIT
 
       - name: Upload TF shard artifact
         uses: actions/upload-artifact@v4
